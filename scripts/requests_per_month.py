@@ -1,32 +1,13 @@
 from __future__ import print_function
+
 import argparse
 from datetime import datetime, timedelta
 
-import pytz
-import yaml
-from datadog import initialize, api
+from datadog import api
 from dateutil.relativedelta import relativedelta
 
-
-ENV_TZ = {
-    'icds': pytz.timezone('Asia/Kolkata'),
-    'prod': pytz.utc,
-    'enikshay': pytz.timezone('Asia/Kolkata'),
-    'india': pytz.timezone('Asia/Kolkata'),
-}
-
-
-def _get_config(path):
-    with open(path, 'r') as f:
-        return yaml.load(f)
-
-
-def _init_datadog(config):
-    initialize(**config['datadog'])
-
-
-def _adjust_datetime_to_utc(value, from_tz):
-    return from_tz.localize(value).astimezone(pytz.utc).replace(tzinfo=None)
+from const import ENV_TZ
+from utils import get_month_int, get_config, init_datadog, adjust_datetime_to_utc
 
 
 def _get_args():
@@ -39,15 +20,6 @@ def _get_args():
     return parser.parse_args()
 
 
-def _get_month_int(month_string):
-    for form in ('%b', '%B'):
-        try:
-            return datetime.strptime(month_string, form).month
-        except:
-            pass
-    raise Exception('Unknown month: %s' % month_string)
-
-
 def print_requests(env, month_start, month_end, timezone):
     title = "Data for '%s' using timezone: '%s'" % (args.env.upper(), timezone)
     print(title)
@@ -56,7 +28,7 @@ def print_requests(env, month_start, month_end, timezone):
 
     for month in range(month_start, month_end + 1):
         start = datetime.min.replace(year=2017, month=month, day=1)
-        start_utc = _adjust_datetime_to_utc(
+        start_utc = adjust_datetime_to_utc(
             start, timezone
         )
         end_utc = start + relativedelta(months=1) - timedelta(seconds=1)
@@ -71,10 +43,10 @@ if __name__ == "__main__":
 
     args = _get_args()
 
-    month_start = _get_month_int(args.month_start)
-    month_end = _get_month_int(args.month_end)
+    month_start = get_month_int(args.month_start)
+    month_end = get_month_int(args.month_end)
 
-    config = _get_config(args.config)
-    _init_datadog(config)
+    config = get_config(args.config)
+    init_datadog(config)
 
     print_requests(args.env, month_start, month_end, ENV_TZ[args.env])

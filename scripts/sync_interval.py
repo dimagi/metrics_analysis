@@ -1,23 +1,11 @@
 from __future__ import print_function
+
 import argparse
 from datetime import datetime, timedelta
 
-import pytz
-import yaml
-from datadog import initialize, api
-from dateutil.relativedelta import relativedelta
+from datadog import api
 
-def _get_config(path):
-    with open(path, 'r') as f:
-        return yaml.load(f)
-
-
-def _init_datadog(config):
-    initialize(**config['datadog'])
-
-
-def _adjust_datetime_to_utc(value, from_tz):
-    return from_tz.localize(value).astimezone(pytz.utc).replace(tzinfo=None)
+from utils import get_config, init_datadog
 
 
 def _get_args():
@@ -26,14 +14,6 @@ def _get_args():
 
     return parser.parse_args()
 
-
-def _get_month_int(month_string):
-    for form in ('%b', '%B'):
-        try:
-            return datetime.strptime(month_string, form).month
-        except:
-            pass
-    raise Exception('Unknown month: %s' % month_string)
 
 CATEGORIES = ('initial', 'lt_002d', 'lt_007d', 'lt_014d', 'lt_028d', 'over_028d')
 ENVS = ('icds', 'enikshay', 'production')
@@ -64,7 +44,7 @@ def print_requests():
 if __name__ == "__main__":
 
     args = _get_args()
-    config = _get_config(args.config)
-    _init_datadog(config)
+    config = get_config(args.config)
+    init_datadog(config)
 
     print_requests()
