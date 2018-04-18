@@ -16,7 +16,7 @@ def get_month_int(month_string):
     raise Exception('Unknown month: %s' % month_string)
 
 
-def get_month(month_string):
+def get_date(month_string):
     return datetime.strptime(month_string, '%Y-%m-%d')
 
 
