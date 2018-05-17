@@ -2,3 +2,5 @@ datadog
 pytz
 PyYAML
 python-dateutil
+memoized
+requests
