@@ -7,7 +7,7 @@ from datadog import api
 from dateutil.relativedelta import relativedelta
 
 from const import ENV_TZ
-from utils import get_month_int, get_config, init_datadog, adjust_datetime_to_utc
+from utils import get_date, get_config, init_datadog, adjust_datetime_to_utc
 
 
 def _get_args():
@@ -43,8 +43,8 @@ if __name__ == "__main__":
 
     args = _get_args()
 
-    month_start = get_month_int(args.month_start)
-    month_end = get_month_int(args.month_end)
+    month_start = get_date(args.month_start).month
+    month_end = get_date(args.month_end).month
 
     config = get_config(args.config)
     init_datadog(config)
