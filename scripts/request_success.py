@@ -12,10 +12,7 @@ METRICS = (
     ('request_count', "sum:nginx.requests{{environment:{env}}}.as_count().rollup(sum, {rollup})"),
     ('request_success', "sum:nginx.requests{{environment:{env},!status_code:503}}.as_count().rollup(sum, {rollup})"),
     ('submission_count', "sum:nginx.requests{{environment:{env},url_group:receiver}}.as_count().rollup(sum, {rollup})"),
-    ('submission_count_success', """
-        sum:nginx.requests{{environment:{env},url_group:receiver,status_code:201}}.as_count().rollup(sum, {rollup})
-        + sum:nginx.requests{{environment:{env},url_group:receiver,status_code:401}}.as_count().rollup(sum, {rollup})
-    """),
+    ('submission_count_success', "sum:nginx.requests{{environment:{env},url_group:receiver,status_code:201}}.as_count().rollup(sum, {rollup})"),
     ('restores_count', "sum:nginx.requests{{environment:{env},url_group:phone}}.rollup(sum, {rollup})"),
     ('restores_count_success', """
         sum:nginx.requests{{environment:{env},status_code:412,url_group:phone}}.rollup(sum, {rollup})
