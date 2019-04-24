@@ -2,7 +2,7 @@ from __future__ import print_function
 from __future__ import division
 import argparse
 import json
-from collections import defaultdict, namedtuple
+from collections import defaultdict, namedtuple, OrderedDict
 
 from memoized import memoized
 
@@ -32,7 +32,7 @@ def kb_to_gb(string):
     return '{:.0f}'.format(in_gb)
 
 
-HostStats = namedtuple('HostStats', 'name, memory, swap, cpu_logical_processors, disk')
+HostStats = namedtuple('HostStats', 'name, memory, swap, cpu_logical_processors, disk, all_disks')
 
 
 @memoized
@@ -52,6 +52,7 @@ def get_host_stats(env_name):
         method='GET', url=infra_link, params=s.params
     ).json()
     host_stats_list = []
+    all_disks = set()
     for host in infra_content['rows']:
         specs = json.loads(host['meta']['gohai'])
         memory = kb_to_gb(specs['memory']['total'])
@@ -60,15 +61,21 @@ def get_host_stats(env_name):
         disk = kb_to_gb('{}kB'.format(sum(int(drive['kb_size'])
                                           for drive in specs['filesystem']
                                           if drive['name'].startswith('/opt/data'))))
+        disks = {
+            drive['name']: kb_to_gb('{}kB'.format(int(drive['kb_size'])))
+            for drive in specs['filesystem']
+        }
+        all_disks.update({drive['name'] for drive in specs['filesystem']})
         host_stats_list.append(HostStats(
             name=host['host_name'],
             memory=memory,
             swap=swap,
             cpu_logical_processors=cpu_logical_processors,
             disk=disk,
+            all_disks=disks
         ))
     host_stats_list.sort(key=lambda host_stats: host_stats.name)
-    return host_stats_list
+    return host_stats_list, all_disks
 
 
 def get_host_usage_stats(env_name):
@@ -77,7 +84,7 @@ def get_host_usage_stats(env_name):
 
     now = int(time.time())
     usage_stats_by_host = defaultdict(dict)
-    host_stats_by_host = {host_stats.name: host_stats for host_stats in get_host_stats(env_name)}
+    host_stats_by_host = {host_stats.name: host_stats for host_stats, _ in get_host_stats(env_name)}
 
     def get_pointlist_by_host(query_result):
         pointlist_by_host = defaultdict(dict)
@@ -131,15 +138,26 @@ def get_host_usage_stats(env_name):
 
 
 def print_hosts(env_name):
-    print('{}\t{}\t{}\t{}\t{}'.format('Name', 'Memory (GB)', 'Swap (GB)', 'Logical Processors', 'Disk (GB)'))
-    for host_stats in get_host_stats(env_name):
-        print('{name}\t{memory}\t{swap}\t{cpu_logical_processors}\t{disk}'.format(**host_stats._asdict()))
+    stats, all_disks = get_host_stats(env_name)
+    all_disks = sorted(all_disks)
+    print('{},{},{},{},{},{}'.format('Name', 'Memory (GB)', 'Swap (GB)', 'Logical Processors', 'Disk (GB)', ','.join(all_disks)))
+    template = '{name},{memory},{swap},{cpu_logical_processors},{disk},{%s}' % '},{'.join(all_disks)
+    for host_stats in stats:
+        asdict = host_stats._asdict()
+        disks = asdict.pop('all_disks')
+        disks = OrderedDict(sorted(disks.items()))
+        for d in all_disks:
+            disks.setdefault(d, '')
+        asdict.update(disks)
+        print(template.format(**asdict))
 
 
 def print_host_usage(env_name):
-    print('{}\t{}\t{}\t{}\t{}'.format('Name', 'Memory (GB)', 'Swap (GB)', 'Logical Processors', 'Disk (GB)'))
+    print('{},{},{},{},{}'.format('Name', 'Memory (GB)', 'Swap (GB)', 'Logical Processors', 'Disk (GB)'))
     for host_stats in get_host_usage_stats(env_name):
-        print('{name}\t{memory:.1f}\t{swap:.1f}\t{cpu_logical_processors:.1f}\t{disk:.1f}'.format(**host_stats._asdict()))
+        stats = host_stats._asdict()
+        stats.pop('all_disks')
+        print('{name},{memory:.1f},{swap:.1f},{cpu_logical_processors:.1f},{disk:.1f}'.format(**stats))
 
 
 if __name__ == "__main__":
