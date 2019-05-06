@@ -32,7 +32,7 @@ def kb_to_gb(string):
     return '{:.0f}'.format(in_gb)
 
 
-HostStats = namedtuple('HostStats', 'name, memory, swap, cpu_logical_processors, disk')
+HostStats = namedtuple('HostStats', 'name, memory, swap, cpu_logical_processors, disk, root_disk')
 
 
 @memoized
@@ -60,12 +60,15 @@ def get_host_stats(env_name):
         disk = kb_to_gb('{}kB'.format(sum(int(drive['kb_size'])
                                           for drive in specs['filesystem']
                                           if drive['name'].startswith('/opt/data'))))
+        root_disk = kb_to_gb('{}kB'.format( sum(int(drive['kb_size']) for drive in specs['filesystem'] 
+                    if drive['mounted_on'] == '/' )))
         host_stats_list.append(HostStats(
             name=host['host_name'],
             memory=memory,
             swap=swap,
             cpu_logical_processors=cpu_logical_processors,
             disk=disk,
+            root_disk=root_disk
         ))
     host_stats_list.sort(key=lambda host_stats: host_stats.name)
     return host_stats_list
@@ -122,24 +125,35 @@ def get_host_usage_stats(env_name):
                 new_value = max(value for _, value in pointlist) / 1024 ** 3
                 usage_stats_by_host[host]['disk'] = max(usage_stats_by_host[host]['disk'], new_value)
 
+    def add_highest_root_disk_in_last_week():
+        for host in host_stats_by_host:
+            usage_stats_by_host[host]['root_disk'] = 0
+        for root_drive in ['/dev/mapper/vg_root-lv_root']:
+            query = 'sum:system.disk.used{environment:%s,device:%s}by{host}' % (env_name, root_drive)
+            disk_stats = get_pointlist_by_host(api.Metric.query(start=now - 604800, end=now, query=query))
+            for host, pointlist in disk_stats.items():
+                new_value = max(value for _, value in pointlist) / 1024 ** 3
+                usage_stats_by_host[host]['root_disk'] = max(usage_stats_by_host[host]['root_disk'], new_value)    
+
     add_highest_cpu_in_last_week()
     add_highest_mem_in_last_week()
     add_highest_swap_in_last_week()
     add_highest_disk_in_last_week()
+    add_highest_root_disk_in_last_week()
     return sorted((HostStats(name=host, **stats) for host, stats in usage_stats_by_host.items()),
                   key=lambda host_stats: host_stats.name)
 
 
 def print_hosts(env_name):
-    print('{}\t{}\t{}\t{}\t{}'.format('Name', 'Memory (GB)', 'Swap (GB)', 'Logical Processors', 'Disk (GB)'))
+    print('{}\t{}\t{}\t{}\t{}\t{}'.format('Name', 'Memory (GB)', 'Swap (GB)', 'Logical Processors', 'Disk (GB)', 'ROOT DISK(GB)'))
     for host_stats in get_host_stats(env_name):
-        print('{name}\t{memory}\t{swap}\t{cpu_logical_processors}\t{disk}'.format(**host_stats._asdict()))
+        print('{name}\t{memory}\t{swap}\t{cpu_logical_processors}\t{disk}\t{root_disk}'.format(**host_stats._asdict()))
 
 
 def print_host_usage(env_name):
-    print('{}\t{}\t{}\t{}\t{}'.format('Name', 'Memory (GB)', 'Swap (GB)', 'Logical Processors', 'Disk (GB)'))
+    print('{}\t{}\t{}\t{}\t{}\t{}'.format('Name', 'Memory (GB)', 'Swap (GB)', 'Logical Processors', 'Disk (GB)','ROOT DISK(GB)'))
     for host_stats in get_host_usage_stats(env_name):
-        print('{name}\t{memory:.1f}\t{swap:.1f}\t{cpu_logical_processors:.1f}\t{disk:.1f}'.format(**host_stats._asdict()))
+        print('{name}\t{memory:.1f}\t{swap:.1f}\t{cpu_logical_processors:.1f}\t{disk:.1f}\t{root_disk:.1f}'.format(**host_stats._asdict()))
 
 
 if __name__ == "__main__":
