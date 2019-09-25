@@ -17,6 +17,7 @@ DATADOG_ENVS = [
     'swiss',
 ]
 
+
 def _get_args():
     parser = argparse.ArgumentParser(description='Print machine sizes for cluster.')
     parser.add_argument('env_name', choices=DATADOG_ENVS, help='Environment to query.')
@@ -33,6 +34,28 @@ def kb_to_gb(string):
 
 
 HostStats = namedtuple('HostStats', 'name, memory, swap, cpu_logical_processors, disk, all_disks')
+
+disk_ignores = [
+    'none', None, 'udev', '/dev/mapper/vg_data-lv_data', '/opt/tmp',
+    'tmpfs', '/dev/vda1', '/boot'
+]
+
+
+class Disk(object):
+    def __init__(self, name, mount_point, kb_size):
+        self.name = name
+        self.mount_point = mount_point
+        self.kb_size = kb_size
+
+    @property
+    def gb_size(self):
+        return kb_to_gb('{}kB'.format(self.kb_size))
+
+    def __repr__(self):
+        return 'Disk({self.name}, {self.mount_point}, {self.kb_size})'.format(self=self)
+
+    def __str__(self):
+        return self.gb_size
 
 
 @memoized
@@ -62,10 +85,11 @@ def get_host_stats(env_name):
                                           for drive in specs['filesystem']
                                           if drive['name'].startswith('/opt/data'))))
         disks = {
-            drive['name']: kb_to_gb('{}kB'.format(int(drive['kb_size'])))
+            drive['mounted_on']: Disk(drive['name'], drive['mounted_on'], int(drive['kb_size']))
             for drive in specs['filesystem']
+            if drive['name'] not in disk_ignores and drive['mounted_on'] not in disk_ignores
         }
-        all_disks.update({drive['name'] for drive in specs['filesystem']})
+        all_disks.update(set(disks))
         host_stats_list.append(HostStats(
             name=host['host_name'],
             memory=memory,
@@ -84,24 +108,41 @@ def get_host_usage_stats(env_name):
 
     now = int(time.time())
     usage_stats_by_host = defaultdict(dict)
-    host_stats_by_host = {host_stats.name: host_stats for host_stats, _ in get_host_stats(env_name)}
+    host_stats, all_disks = get_host_stats(env_name)
+    host_stats_by_host = {stats.name: stats for stats in host_stats}
 
-    def get_pointlist_by_host(query_result):
+    period = 12 * 3600
+    start = now - period
+
+    def get_pointlist(query_result, tags=None):
+        tags = tags or ['host']
         pointlist_by_host = defaultdict(dict)
         for by_host in query_result['series']:
-            scope = dict(tag.split(':') for tag in by_host['scope'].split(','))
+            scope = {}
+            for tag in by_host['scope'].split(','):
+                split = tag.split(':')
+                if len(split) > 2:  # device:100.71.188.44:/opt/shared_icds
+                    scope[split[0]] = split[-1]
+                else:
+                    scope[split[0]] = split[1]
             pointlist = by_host['pointlist']
-            pointlist_by_host[scope['host']] = pointlist
-        return {host: pointlist for host, pointlist in pointlist_by_host.items()
-                # make sure the host is still around
-                if host in host_stats_by_host}
+            context = pointlist_by_host
+            for tag in tags[:-1]:
+                key = scope[tag]
+                if key not in context:
+                    context[key] = {}
+                context = context[key]
+            context[scope[tags[-1]]] = pointlist
+        return pointlist_by_host
 
     def add_highest_cpu_in_last_week():
         """
         CPU expressed as proportion of total used. E.g. 0.25 means 25% used
         """
         query = 'system.cpu.idle{environment:%s}by{host}' % env_name
-        cpu_stats = get_pointlist_by_host(api.Metric.query(start=now - 604800, end=now, query=query))
+
+
+        cpu_stats = get_pointlist(api.Metric.query(start=start, end=now, query=query))
         for host, pointlist in cpu_stats.items():
             cpu_proportion = (1 - min(value for _, value in pointlist if value is not None) / 100)
             cpu_total = host_stats_by_host[host].cpu_logical_processors
@@ -109,25 +150,29 @@ def get_host_usage_stats(env_name):
 
     def add_highest_mem_in_last_week():
         query = 'system.mem.used{environment:%s}by{host}' % env_name
-        mem_stats = get_pointlist_by_host(api.Metric.query(start=now - 604800, end=now, query=query))
+        mem_stats = get_pointlist(api.Metric.query(start=start, end=now, query=query))
         for host, pointlist in mem_stats.items():
             usage_stats_by_host[host]['memory'] = max(value for _, value in pointlist) / 1024 ** 3
 
     def add_highest_swap_in_last_week():
         query = 'system.swap.used{environment:%s}by{host}' % env_name
-        swap_stats = get_pointlist_by_host(api.Metric.query(start=now - 604800, end=now, query=query))
+        swap_stats = get_pointlist(api.Metric.query(start=start, end=now, query=query))
         for host, pointlist in swap_stats.items():
             usage_stats_by_host[host]['swap'] = max(value for _, value in pointlist) / 1024 ** 3
 
     def add_highest_disk_in_last_week():
         for host in host_stats_by_host:
             usage_stats_by_host[host]['disk'] = 0
-        for opt_data in ['/opt/data', '/opt/data/ecrypt']:
-            query = 'sum:system.disk.used{environment:%s,device:%s}by{host}' % (env_name, opt_data)
-            disk_stats = get_pointlist_by_host(api.Metric.query(start=now - 604800, end=now, query=query))
-            for host, pointlist in disk_stats.items():
-                new_value = max(value for _, value in pointlist) / 1024 ** 3
-                usage_stats_by_host[host]['disk'] = max(usage_stats_by_host[host]['disk'], new_value)
+            usage_stats_by_host[host]['all_disks'] = defaultdict(int)
+
+        query = 'sum:system.disk.in_use{environment:%s}by{host,device}' % (env_name)
+        disk_stats = get_pointlist(api.Metric.query(start=start, end=now, query=query), tags=['host', 'device'])
+        for host, by_device in disk_stats.items():
+            for device, pointlist in by_device.items():
+                new_value = max(value for _, value in pointlist) * 100
+                if device in ('/opt/data', '/opt/data/ecrypt', '/opt_new', '/opt/data1'):
+                    usage_stats_by_host[host]['disk'] = max(usage_stats_by_host[host]['disk'], new_value)
+                usage_stats_by_host[host]['all_disks'][device] = max(usage_stats_by_host[host]['all_disks'][device], new_value)
 
     add_highest_cpu_in_last_week()
     add_highest_mem_in_last_week()
@@ -140,8 +185,8 @@ def get_host_usage_stats(env_name):
 def print_hosts(env_name):
     stats, all_disks = get_host_stats(env_name)
     all_disks = sorted(all_disks)
-    print('{},{},{},{},{},{}'.format('Name', 'Memory (GB)', 'Swap (GB)', 'Logical Processors', 'Disk (GB)', ','.join(all_disks)))
-    template = '{name},{memory},{swap},{cpu_logical_processors},{disk},{%s}' % '},{'.join(all_disks)
+    print('{},{},{},{},{}'.format('Name', 'Memory (GB)', 'Swap (GB)', 'Logical Processors', ','.join(all_disks)))
+    template = '{name},{memory},{swap},{cpu_logical_processors},{%s}' % '},{'.join(all_disks)
     for host_stats in stats:
         asdict = host_stats._asdict()
         disks = asdict.pop('all_disks')
@@ -153,11 +198,18 @@ def print_hosts(env_name):
 
 
 def print_host_usage(env_name):
-    print('{},{},{},{},{}'.format('Name', 'Memory (GB)', 'Swap (GB)', 'Logical Processors', 'Disk (GB)'))
+    stats, all_disks = get_host_stats(env_name)
+    print('{},{},{},{},{},{}'.format('Name', 'Memory (GB)', 'Swap (GB)', 'Logical Processors', 'Max Disk Usage (%)', ','.join(all_disks)))
+    template = '{name},{memory:.1f},{swap:.1f},{cpu_logical_processors:.1f},{disk_max:.1f},{%s:.1f}' % ':.1f},{'.join(all_disks)
     for host_stats in get_host_usage_stats(env_name):
-        stats = host_stats._asdict()
-        stats.pop('all_disks')
-        print('{name},{memory:.1f},{swap:.1f},{cpu_logical_processors:.1f},{disk:.1f}'.format(**stats))
+        asdict = host_stats._asdict()
+        disks = asdict.pop('all_disks')
+        disks = OrderedDict(sorted(disks.items()))
+        for d in all_disks:
+            disks.setdefault(d, 0)
+        asdict.update(disks)
+        asdict['disk_max'] = max(disks.values())
+        print(template.format(**asdict))
 
 
 if __name__ == "__main__":
