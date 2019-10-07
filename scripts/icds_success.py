@@ -17,9 +17,16 @@ from utils import get_date, get_config, init_datadog, adjust_datetime_to_utc
 
 INTERVAL_SEC = 15 * 60
 
-METRICS = {
+MAX_INTERVAL_METRICS = {
     'Form Processing Volume': "sum:nginx.requests{{environment:{env},url_group:receiver,status_code:201}}.as_count().rollup(sum, {rollup})",
     'Phone Sync Volume': "sum:nginx.requests{{environment:{env},url_group:phone/restore,status_code:200}}.as_count().rollup(sum, {rollup})",
+}
+
+METRICS = {
+    'Total forms submissions': (
+        "top(cumsum(sum:commcare.xform_submissions.count{{environment:{env},!submission_type:device-log}}.as_count()), 1, 'last', 'desc')",
+        lambda results: int(results['series'][0]['attributes']['top']['value'][0])
+    ),
 }
 
 def _get_args():
@@ -36,18 +43,26 @@ def print_requests(start_date, end_date, show_data=False):
     timezone = ENV_TZ['icds']
     start_utc = adjust_datetime_to_utc(start_date, timezone)
 
-    print('Reporting for period: {} to {}'.format(start_utc, adjust_datetime_to_utc(end_date, timezone)))
-    for metric in METRICS:
+    end_utc = adjust_datetime_to_utc(end_date, timezone)
+    print('Reporting for period: {} to {}'.format(start_utc, end_utc))
+
+    for metric, (query, extractor) in METRICS.items():
+        query = query.format(env='icds')
+        results = api.Metric.query(start=start_utc.strftime('%s'), end=end_utc.strftime('%s'), query=query)
+        value = extractor(results)
+        print('\n{}: {}'.format(metric, value))
+
+    for metric in MAX_INTERVAL_METRICS:
         if show_data:
             print('\n{}'.format(metric))
             print('{}\n'.format('=' * len(metric)))
 
-        query = METRICS[metric]
+        query = MAX_INTERVAL_METRICS[metric]
         query = query.format(env='icds', rollup=INTERVAL_SEC)
 
         daily_data = []
         start_day = start_utc
-        while start_day < adjust_datetime_to_utc(end_date , timezone):
+        while start_day < end_utc:
             end_day = start_day + timedelta(days=1)
 
             results = api.Metric.query(start=start_day.strftime('%s'), end=end_day.strftime('%s'), query=query)
