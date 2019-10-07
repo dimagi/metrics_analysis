@@ -33,7 +33,7 @@ def kb_to_gb(string):
     return '{:.0f}'.format(in_gb)
 
 
-HostStats = namedtuple('HostStats', 'name, memory, swap, cpu_logical_processors, disk, all_disks')
+HostStats = namedtuple('HostStats', 'name, memory, swap, cpu_logical_processors, disk, all_disks, memory_max_usage, cpu_max_usage')
 
 disk_ignores = [
     'none', None, 'udev', '/dev/mapper/vg_data-lv_data', '/opt/tmp',
@@ -96,7 +96,9 @@ def get_host_stats(env_name):
             swap=swap,
             cpu_logical_processors=cpu_logical_processors,
             disk=disk,
-            all_disks=disks
+            all_disks=disks,
+            cpu_max_usage=None,
+            memory_max_usage=None
         ))
     host_stats_list.sort(key=lambda host_stats: host_stats.name)
     return host_stats_list, all_disks
@@ -111,7 +113,7 @@ def get_host_usage_stats(env_name):
     host_stats, all_disks = get_host_stats(env_name)
     host_stats_by_host = {stats.name: stats for stats in host_stats}
 
-    period = 12 * 3600
+    period = 24 * 3600 * 7
     start = now - period
 
     def get_pointlist(query_result, tags=None):
@@ -139,23 +141,25 @@ def get_host_usage_stats(env_name):
         """
         CPU expressed as proportion of total used. E.g. 0.25 means 25% used
         """
-        query = 'system.cpu.idle{environment:%s}by{host}' % env_name
-
-
+        query = 'min:system.cpu.idle{environment:%s}by{host}' % env_name
         cpu_stats = get_pointlist(api.Metric.query(start=start, end=now, query=query))
         for host, pointlist in cpu_stats.items():
             cpu_proportion = (1 - min(value for _, value in pointlist if value is not None) / 100)
             cpu_total = host_stats_by_host[host].cpu_logical_processors
             usage_stats_by_host[host]['cpu_logical_processors'] = cpu_total * cpu_proportion
+            usage_stats_by_host[host]['cpu_max_usage'] = cpu_proportion * 100
 
     def add_highest_mem_in_last_week():
-        query = 'system.mem.used{environment:%s}by{host}' % env_name
+        query = 'max:system.mem.used{environment:%s}by{host}' % env_name
         mem_stats = get_pointlist(api.Metric.query(start=start, end=now, query=query))
         for host, pointlist in mem_stats.items():
-            usage_stats_by_host[host]['memory'] = max(value for _, value in pointlist) / 1024 ** 3
+            memory_total = host_stats_by_host[host].memory
+            max_usage = max(value for _, value in pointlist) / 1024 ** 3
+            usage_stats_by_host[host]['memory'] = max_usage
+            usage_stats_by_host[host]['memory_max_usage'] = 100 * max_usage / int(memory_total)
 
     def add_highest_swap_in_last_week():
-        query = 'system.swap.used{environment:%s}by{host}' % env_name
+        query = 'max:system.swap.used{environment:%s}by{host}' % env_name
         swap_stats = get_pointlist(api.Metric.query(start=start, end=now, query=query))
         for host, pointlist in swap_stats.items():
             usage_stats_by_host[host]['swap'] = max(value for _, value in pointlist) / 1024 ** 3
@@ -199,8 +203,12 @@ def print_hosts(env_name):
 
 def print_host_usage(env_name):
     stats, all_disks = get_host_stats(env_name)
-    print('{},{},{},{},{},{}'.format('Name', 'Memory (GB)', 'Swap (GB)', 'Logical Processors', 'Max Disk Usage (%)', ','.join(all_disks)))
-    template = '{name},{memory:.1f},{swap:.1f},{cpu_logical_processors:.1f},{disk_max:.1f},{%s:.1f}' % ':.1f},{'.join(all_disks)
+    fixed_headers = ','.join([
+        'Name', 'Memory (GB)', 'Swap (GB)', 'Logical Processors',
+        'Max Memory Usage (%)', 'Max CPU Usage (%)', 'Max Disk Usage (%)'
+    ])
+    print('{},{}'.format(fixed_headers, ','.join(all_disks)))
+    template = '{name},{memory:.1f},{swap:.1f},{cpu_logical_processors:.1f},{memory_max_usage:.1f},{cpu_max_usage:.1f},{disk_max:.1f},{%s:.1f}' % ':.1f},{'.join(all_disks)
     for host_stats in get_host_usage_stats(env_name):
         asdict = host_stats._asdict()
         disks = asdict.pop('all_disks')
