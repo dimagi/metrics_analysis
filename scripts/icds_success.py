@@ -22,10 +22,45 @@ MAX_INTERVAL_METRICS = {
     'Phone Sync Volume': "sum:nginx.requests{{environment:{env},url_group:phone/restore,status_code:200}}.as_count().rollup(sum, {rollup})",
 }
 
+
+def _get_max(results):
+    pointslist = results['series'][0]['pointlist']
+    return sorted(pointslist, key=lambda p: p[1])[-1]
+
+
+def _get_avg(results):
+    pointslist = results['series'][0]['pointlist']
+    return None, sum([p[1] for p in pointslist]) / len(pointslist)
+
+
+def _get_top(results):
+    date, value = results['series'][0]['attributes']['top']['value']
+    return date, int(value)
+
+
 METRICS = {
     'Total forms submissions': (
         "top(cumsum(sum:commcare.xform_submissions.count{{environment:{env},!submission_type:device-log}}.as_count()), 1, 'last', 'desc')",
-        lambda results: int(results['series'][0]['attributes']['top']['value'][0])
+        _get_top
+    ),
+    'Max Form submissions per day': (
+        "sum:nginx.requests{{environment:{env},url_group:receiver,status_code:201}}.as_count().rollup(sum, 86400)",
+        _get_max
+    ),
+    'Max Restores submissions per day': (
+        "sum:nginx.requests{{environment:{env},url_group:phone/restore,status_code:200}}.as_count().rollup(sum, 86400)",
+        _get_max
+    ),
+    'Avg Success %': (
+        "("
+        "  sum:nginx.requests{{environment:{env},status_code:200}}.as_count().rollup(sum, 86400)"
+        "+ sum:nginx.requests{{environment:{env},status_code:201}}.as_count().rollup(sum, 86400)"
+        "+ sum:nginx.requests{{environment:{env},status_code:202}}.as_count().rollup(sum, 86400)"
+        "+ sum:nginx.requests{{environment:{env},status_code:301}}.as_count().rollup(sum, 86400)"
+        "+ sum:nginx.requests{{environment:{env},status_code:302}}.as_count().rollup(sum, 86400)"
+        "+ sum:nginx.requests{{environment:{env},status_code:412}}.as_count().rollup(sum, 86400)"
+        ")*100/sum:nginx.requests{{environment:{env}}}.as_count().rollup(sum, 86400)",
+        _get_avg
     ),
 }
 
@@ -49,8 +84,8 @@ def print_requests(start_date, end_date, show_data=False):
     for metric, (query, extractor) in METRICS.items():
         query = query.format(env='icds')
         results = api.Metric.query(start=start_utc.strftime('%s'), end=end_utc.strftime('%s'), query=query)
-        value = extractor(results)
-        print('\n{}: {}'.format(metric, value))
+        date, value = extractor(results)
+        print('\n{}: {:.0f} {}'.format(metric, value, format_epoch(date, timezone) if date else ''))
 
     for metric in MAX_INTERVAL_METRICS:
         if show_data:
@@ -86,7 +121,7 @@ def print_requests(start_date, end_date, show_data=False):
 
         if show_data:
             heads = ['#'] + [
-                '{}'.format(from_utc_to_tz(datetime.fromtimestamp(day_points[0][0] / 1000), timezone).strftime('%Y-%m-%d')) for day_points in daily_data
+                '{}'.format(format_epoch(day_points[0][0], timezone)) for day_points in daily_data
             ]
             print(','.join(heads))
             for row_count, row in enumerate(izip_longest(*daily_data)):
@@ -103,11 +138,15 @@ def print_requests(start_date, end_date, show_data=False):
             print('\nDaily Max:')
             for day, val_max in daily_max:
                 print('   {}: {}'.format(
-                    from_utc_to_tz(datetime.fromtimestamp(day / 1000), timezone).strftime('%Y-%m-%d'),
+                    format_epoch(day, timezone),
                     val_max
                 ))
 
         print('\nPeak Performance (15 Minute Max) {}: {}'.format(metric, max([dm[1] for dm in daily_max])))
+
+
+def format_epoch(day, timezone):
+    return from_utc_to_tz(datetime.fromtimestamp(day / 1000), timezone).strftime('%Y-%m-%d')
 
 
 def from_utc_to_tz(date, tz):
