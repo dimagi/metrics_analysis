@@ -141,7 +141,7 @@ def get_host_usage_stats(env_name):
         """
         CPU expressed as proportion of total used. E.g. 0.25 means 25% used
         """
-        query = 'min:system.cpu.idle{environment:%s}by{host}' % env_name
+        query = 'min:system.cpu.idle{environment:%s}by{host}.rollup(min, 86400)' % env_name
         cpu_stats = get_pointlist(api.Metric.query(start=start, end=now, query=query))
         for host, pointlist in cpu_stats.items():
             cpu_proportion = (1 - min(value for _, value in pointlist if value is not None) / 100)
@@ -150,7 +150,7 @@ def get_host_usage_stats(env_name):
             usage_stats_by_host[host]['cpu_max_usage'] = cpu_proportion * 100
 
     def add_highest_mem_in_last_week():
-        query = 'max:system.mem.used{environment:%s}by{host}' % env_name
+        query = 'max:system.mem.used{environment:%s}by{host}.rollup(max, 86400)' % env_name
         mem_stats = get_pointlist(api.Metric.query(start=start, end=now, query=query))
         for host, pointlist in mem_stats.items():
             memory_total = host_stats_by_host[host].memory
@@ -159,7 +159,7 @@ def get_host_usage_stats(env_name):
             usage_stats_by_host[host]['memory_max_usage'] = 100 * max_usage / int(memory_total)
 
     def add_highest_swap_in_last_week():
-        query = 'max:system.swap.used{environment:%s}by{host}' % env_name
+        query = 'max:system.swap.used{environment:%s}by{host}.rollup(max, 86400)' % env_name
         swap_stats = get_pointlist(api.Metric.query(start=start, end=now, query=query))
         for host, pointlist in swap_stats.items():
             usage_stats_by_host[host]['swap'] = max(value for _, value in pointlist) / 1024 ** 3
@@ -169,7 +169,7 @@ def get_host_usage_stats(env_name):
             usage_stats_by_host[host]['disk'] = 0
             usage_stats_by_host[host]['all_disks'] = defaultdict(int)
 
-        query = 'sum:system.disk.in_use{environment:%s}by{host,device}' % (env_name)
+        query = 'max:system.disk.in_use{environment:%s}by{host,device}.rollup(max, 86400)' % (env_name)
         disk_stats = get_pointlist(api.Metric.query(start=start, end=now, query=query), tags=['host', 'device'])
         for host, by_device in disk_stats.items():
             for device, pointlist in by_device.items():
