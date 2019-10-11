@@ -21,7 +21,8 @@ DATADOG_ENVS = [
 def _get_args():
     parser = argparse.ArgumentParser(description='Print machine sizes for cluster.')
     parser.add_argument('env_name', choices=DATADOG_ENVS, help='Environment to query.')
-    parser.add_argument('--config', default='config.yml', help='Path to config file.')
+    parser.add_argument('-c', '--config', default='config.yml', help='Path to config file.')
+    parser.add_argument('-d', '--days-past', type=int, default=7, help='How many days in the past to query.')
 
     return parser.parse_args()
 
@@ -104,7 +105,7 @@ def get_host_stats(env_name):
     return host_stats_list, all_disks
 
 
-def get_host_usage_stats(env_name):
+def get_host_usage_stats(env_name, days_past):
     from datadog import api
     import time
 
@@ -113,7 +114,7 @@ def get_host_usage_stats(env_name):
     host_stats, all_disks = get_host_stats(env_name)
     host_stats_by_host = {stats.name: stats for stats in host_stats}
 
-    period = 24 * 3600 * 7
+    period = 24 * 3600 * days_past
     start = now - period
 
     def get_pointlist(query_result, tags=None):
@@ -201,7 +202,7 @@ def print_hosts(env_name):
         print(template.format(**asdict))
 
 
-def print_host_usage(env_name):
+def print_host_usage(env_name, days_past):
     stats, all_disks = get_host_stats(env_name)
     fixed_headers = ','.join([
         'Name', 'Memory (GB)', 'Swap (GB)', 'Logical Processors',
@@ -209,7 +210,7 @@ def print_host_usage(env_name):
     ])
     print('{},{}'.format(fixed_headers, ','.join(all_disks)))
     template = '{name},{memory:.1f},{swap:.1f},{cpu_logical_processors:.1f},{memory_max_usage:.1f},{cpu_max_usage:.1f},{disk_max:.1f},{%s:.1f}' % ':.1f},{'.join(all_disks)
-    for host_stats in get_host_usage_stats(env_name):
+    for host_stats in get_host_usage_stats(env_name, days_past):
         asdict = host_stats._asdict()
         disks = asdict.pop('all_disks')
         disks = OrderedDict(sorted(disks.items()))
@@ -225,4 +226,4 @@ if __name__ == "__main__":
     config = get_config(args.config)
     init_datadog(config)
     print_hosts(args.env_name)
-    print_host_usage(args.env_name)
+    print_host_usage(args.env_name, args.days_past)
