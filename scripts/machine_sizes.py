@@ -2,7 +2,6 @@ from __future__ import print_function
 from __future__ import division
 import argparse
 import json
-import sys
 from collections import defaultdict, namedtuple, OrderedDict
 
 from memoized import memoized
@@ -23,7 +22,6 @@ def _get_args():
     parser = argparse.ArgumentParser(description='Print machine sizes for cluster.')
     parser.add_argument('env_name', choices=DATADOG_ENVS, help='Environment to query.')
     parser.add_argument('--config', default='config.yml', help='Path to config file.')
-    parser.add_argument('--kill-datadog', action='store_true', help='Scrape CPU Usage hourly for higher resolution. WARNING - Will result in large numbers of api calls, easily exhausting rate limits.')
 
     return parser.parse_args()
 
@@ -35,7 +33,7 @@ def kb_to_gb(string):
     return '{:.0f}'.format(in_gb)
 
 
-HostStats = namedtuple('HostStats', 'name, memory, swap, cpu_logical_processors, disk, all_disks, memory_max_usage, cpu_max_usage, cpu_window_start, cpu_window_end')
+HostStats = namedtuple('HostStats', 'name, memory, swap, cpu_logical_processors, disk, all_disks, memory_max_usage, cpu_max_usage')
 
 disk_ignores = [
     'none', None, 'udev', '/dev/mapper/vg_data-lv_data', '/opt/tmp',
@@ -100,33 +98,27 @@ def get_host_stats(env_name):
             disk=disk,
             all_disks=disks,
             cpu_max_usage=None,
-            memory_max_usage=None,
-            cpu_window_start=None,
-            cpu_window_end=None
+            memory_max_usage=None
         ))
     host_stats_list.sort(key=lambda host_stats: host_stats.name)
     return host_stats_list, all_disks
 
 
-def get_host_usage_stats(env_name,high_granularity):
+def get_host_usage_stats(env_name):
     from datadog import api
     import time
 
     now = int(time.time())
-    end = now
     usage_stats_by_host = defaultdict(dict)
     host_stats, all_disks = get_host_stats(env_name)
     host_stats_by_host = {stats.name: stats for stats in host_stats}
 
     period = 24 * 3600 * 7
-    start = end - period
+    start = now - period
 
     def get_pointlist(query_result, tags=None):
         tags = tags or ['host']
         pointlist_by_host = defaultdict(dict)
-        if 'series' not in query_result:
-            print(query_result, file=sys.stderr)
-            exit()
         for by_host in query_result['series']:
             scope = {}
             for tag in by_host['scope'].split(','):
@@ -145,46 +137,21 @@ def get_host_usage_stats(env_name,high_granularity):
             context[scope[tags[-1]]] = pointlist
         return pointlist_by_host
 
-    def add_highest_cpu_in_last_week_high_granularity():
-        """
-        CPU expressed as proportion of total used. E.g. 0.25 means 25% used
-        """
-        query = 'min:system.cpu.idle{environment:%s}by{host}' % env_name
-        granularity = 60 * 60 # one hour
-        
-        for start_time_granular in range(start, end, granularity):
-
-            end_time_granular = start_time_granular + granularity
-            cpu_stats = get_pointlist(api.Metric.query(start=start_time_granular, end=end_time_granular, query=query))
-
-            for host, pointlist in cpu_stats.items():
-                cpu_proportion = (1 - min(value for _, value in pointlist if value is not None) / 100)
-                cpu_total = host_stats_by_host[host].cpu_logical_processors
-                logical_processors = cpu_total * cpu_proportion
-                max_usage = cpu_proportion * 100
-                if 'cpu_max_usage' not in usage_stats_by_host[host] or usage_stats_by_host[host]['cpu_max_usage'] < max_usage:
-	                usage_stats_by_host[host]['cpu_logical_processors'] = cpu_total * cpu_proportion
-	                usage_stats_by_host[host]['cpu_max_usage'] = cpu_proportion * 100
-	                usage_stats_by_host[host]['cpu_window_start'] = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(start_time_granular))
-	                usage_stats_by_host[host]['cpu_window_end'] = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(end_time_granular))
-
     def add_highest_cpu_in_last_week():
         """
         CPU expressed as proportion of total used. E.g. 0.25 means 25% used
         """
         query = 'min:system.cpu.idle{environment:%s}by{host}' % env_name
-        cpu_stats = get_pointlist(api.Metric.query(start=start, end=end, query=query))
+        cpu_stats = get_pointlist(api.Metric.query(start=start, end=now, query=query))
         for host, pointlist in cpu_stats.items():
             cpu_proportion = (1 - min(value for _, value in pointlist if value is not None) / 100)
             cpu_total = host_stats_by_host[host].cpu_logical_processors
             usage_stats_by_host[host]['cpu_logical_processors'] = cpu_total * cpu_proportion
             usage_stats_by_host[host]['cpu_max_usage'] = cpu_proportion * 100
-            usage_stats_by_host[host]['cpu_window_start'] = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(start))
-            usage_stats_by_host[host]['cpu_window_end'] = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(end))
 
     def add_highest_mem_in_last_week():
         query = 'max:system.mem.used{environment:%s}by{host}' % env_name
-        mem_stats = get_pointlist(api.Metric.query(start=start, end=end, query=query))
+        mem_stats = get_pointlist(api.Metric.query(start=start, end=now, query=query))
         for host, pointlist in mem_stats.items():
             memory_total = host_stats_by_host[host].memory
             max_usage = max(value for _, value in pointlist) / 1024 ** 3
@@ -193,7 +160,7 @@ def get_host_usage_stats(env_name,high_granularity):
 
     def add_highest_swap_in_last_week():
         query = 'max:system.swap.used{environment:%s}by{host}' % env_name
-        swap_stats = get_pointlist(api.Metric.query(start=start, end=end, query=query))
+        swap_stats = get_pointlist(api.Metric.query(start=start, end=now, query=query))
         for host, pointlist in swap_stats.items():
             usage_stats_by_host[host]['swap'] = max(value for _, value in pointlist) / 1024 ** 3
 
@@ -203,7 +170,7 @@ def get_host_usage_stats(env_name,high_granularity):
             usage_stats_by_host[host]['all_disks'] = defaultdict(int)
 
         query = 'sum:system.disk.in_use{environment:%s}by{host,device}' % (env_name)
-        disk_stats = get_pointlist(api.Metric.query(start=start, end=end, query=query), tags=['host', 'device'])
+        disk_stats = get_pointlist(api.Metric.query(start=start, end=now, query=query), tags=['host', 'device'])
         for host, by_device in disk_stats.items():
             for device, pointlist in by_device.items():
                 new_value = max(value for _, value in pointlist) * 100
@@ -211,10 +178,7 @@ def get_host_usage_stats(env_name,high_granularity):
                     usage_stats_by_host[host]['disk'] = max(usage_stats_by_host[host]['disk'], new_value)
                 usage_stats_by_host[host]['all_disks'][device] = max(usage_stats_by_host[host]['all_disks'][device], new_value)
 
-    if high_granularity:
-        add_highest_cpu_in_last_week_high_granularity()
-    else:
-        add_highest_cpu_in_last_week()
+    add_highest_cpu_in_last_week()
     add_highest_mem_in_last_week()
     add_highest_swap_in_last_week()
     add_highest_disk_in_last_week()
@@ -237,18 +201,15 @@ def print_hosts(env_name):
         print(template.format(**asdict))
 
 
-def print_host_usage(env_name, high_granularity):
+def print_host_usage(env_name):
     stats, all_disks = get_host_stats(env_name)
-    fixed_headers = ','.join(
-        ['Name', 'Memory (GB)', 'Swap (GB)', 'Logical Processors',
-        'Max Memory Usage (%)', 'Max CPU Usage (%)', 'Max Disk Usage (%)'] +
-        (['CPU Measured (start)', 'CPU Measured (end)'] if high_granularity else [])
-    )
+    fixed_headers = ','.join([
+        'Name', 'Memory (GB)', 'Swap (GB)', 'Logical Processors',
+        'Max Memory Usage (%)', 'Max CPU Usage (%)', 'Max Disk Usage (%)'
+    ])
     print('{},{}'.format(fixed_headers, ','.join(all_disks)))
-    template = '{name},{memory:.1f},{swap:.1f},{cpu_logical_processors:.1f},{memory_max_usage:.1f},{cpu_max_usage:.1f},{disk_max:.1f},%s{%s:.1f}' % (
-    ('{cpu_window_start},{cpu_window_end},' if high_granularity else ''),(':.1f},{'.join(all_disks))
-    )
-    for host_stats in get_host_usage_stats(env_name,high_granularity):
+    template = '{name},{memory:.1f},{swap:.1f},{cpu_logical_processors:.1f},{memory_max_usage:.1f},{cpu_max_usage:.1f},{disk_max:.1f},{%s:.1f}' % ':.1f},{'.join(all_disks)
+    for host_stats in get_host_usage_stats(env_name):
         asdict = host_stats._asdict()
         disks = asdict.pop('all_disks')
         disks = OrderedDict(sorted(disks.items()))
@@ -264,4 +225,4 @@ if __name__ == "__main__":
     config = get_config(args.config)
     init_datadog(config)
     print_hosts(args.env_name)
-    print_host_usage(args.env_name, args.kill_datadog)
+    print_host_usage(args.env_name)
