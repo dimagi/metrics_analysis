@@ -34,8 +34,8 @@ def _get_avg(results):
 
 
 def _get_top(results):
-    date, value = results['series'][0]['attributes']['top']['value']
-    return date, int(value)
+    [value] = results['series'][0]['attributes']['top']['value']
+    return None, int(value)
 
 
 METRICS = {
@@ -69,7 +69,7 @@ def _get_args():
     parser.add_argument('--config', default='config.yml', help='Path to config file.')
     parser.add_argument('--start-date', help='Start Date. Defaults to first day of last month')
     parser.add_argument('--end-date', help='End Date. Defaults to last day of last month')
-    parser.add_argument('--show_data', action='store_true', help='Show all data.')
+    parser.add_argument('--show-data', action='store_true', help='Show all data.')
 
     return parser.parse_args()
 
@@ -85,7 +85,8 @@ def print_requests(start_date, end_date, show_data=False):
         query = query.format(env='icds')
         results = api.Metric.query(start=start_utc.strftime('%s'), end=end_utc.strftime('%s'), query=query)
         date, value = extractor(results)
-        print('\n{}: {:.0f} {}'.format(metric, value, format_epoch(date, timezone) if date else ''))
+        date_output = ' on {}'.format(format_epoch(date, timezone)) if date else ''
+        print('\n{}: {:.0f}{}'.format(metric, value, date_output))
 
     for metric in MAX_INTERVAL_METRICS:
         if show_data:
@@ -132,21 +133,25 @@ def print_requests(start_date, end_date, show_data=False):
 
         daily_max = []
         for day in daily_data:
-            daily_max.append((day[0][0], max([r[1] for r in day])))
+            max_item = sorted(day, key=lambda x: x[1])[-1]
+            daily_max.append(max_item)
 
         if show_data:
             print('\nDaily Max:')
             for day, val_max in daily_max:
                 print('   {}: {}'.format(
-                    format_epoch(day, timezone),
+                    format_epoch(day, timezone, '%Y-%m-%d %H:%M'),
                     val_max
                 ))
 
-        print('\nPeak Performance (15 Minute Max) {}: {}'.format(metric, max([dm[1] for dm in daily_max])))
+        max_item = sorted(daily_max, key=lambda x: x[1])[-1]
+
+        date = format_epoch(max_item[0], timezone, '%Y-%m-%d %H:%M')
+        print('\nPeak Performance (15 Minute Max) {}: {} on {}'.format(metric, max_item[1], date))
 
 
-def format_epoch(day, timezone):
-    return from_utc_to_tz(datetime.fromtimestamp(day / 1000), timezone).strftime('%Y-%m-%d')
+def format_epoch(day, timezone, format='%Y-%m-%d'):
+    return from_utc_to_tz(datetime.fromtimestamp(day / 1000), timezone).strftime(format)
 
 
 def from_utc_to_tz(date, tz):
