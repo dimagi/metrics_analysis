@@ -52,7 +52,7 @@ def print_requests(envs, month_start, month_end):
     print(','.join(headers))
     for i in range(0, len(data)):
         posix_time = data[i][0]
-        datespan = datetime.fromtimestamp(posix_time / 1000).date()  # python datetime POSIX TZ issue
+        datespan = datetime.utcfromtimestamp(posix_time / 1000).date()  # python datetime POSIX TZ issue
         print(", ".join([str(datespan)] + [
             '{}'.format(int(series['pointlist'][i][1]) / 1000000000000 if series['pointlist'][i][1] is not None else '---')
             for series in results['series']

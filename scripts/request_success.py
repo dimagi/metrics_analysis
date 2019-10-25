@@ -57,7 +57,7 @@ def print_requests(env, start, end, timezone, interval):
     data = results['series'][0].get('pointlist', [])
     for i in range(0, len(data)):
         posix_time = data[i][0]
-        datespan = datetime.fromtimestamp(posix_time / 1000).date()  # python datetime POSIX TZ issue
+        datespan = datetime.utcfromtimestamp(posix_time / 1000).date()  # python datetime POSIX TZ issue
         print ", ".join([str(datespan)] + [
             '{}'.format(int(series['pointlist'][i][1]) if series['pointlist'][i][1] is not None else '---')
             for series in results['series']

@@ -145,13 +145,12 @@ def print_requests(start_date, end_date, show_data=False):
                 ))
 
         max_item = sorted(daily_max, key=lambda x: x[1])[-1]
-
         date = format_epoch(max_item[0], timezone, '%Y-%m-%d %H:%M')
         print('\nPeak Performance (15 Minute Max) {}: {} on {}'.format(metric, max_item[1], date))
 
 
 def format_epoch(day, timezone, format='%Y-%m-%d'):
-    return from_utc_to_tz(datetime.fromtimestamp(day / 1000), timezone).strftime(format)
+    return from_utc_to_tz(datetime.utcfromtimestamp(day / 1000), timezone).strftime(format)
 
 
 def from_utc_to_tz(date, tz):

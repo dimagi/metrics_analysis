@@ -78,7 +78,7 @@ def print_requests(env, metric, start, timezone, interval):
         start_day += timedelta(days=1)
 
     heads = ['#'] + [
-        '{}'.format(from_utc_to_tz(datetime.fromtimestamp(day_points[0][0] / 1000), timezone).strftime('%Y-%m-%d')) for day_points in data
+        '{}'.format(from_utc_to_tz(datetime.utcfromtimestamp(day_points[0][0] / 1000), timezone).strftime('%Y-%m-%d')) for day_points in data
     ]
     print(','.join(heads))
     for row_count, row in enumerate(izip_longest(*data)):
@@ -91,7 +91,7 @@ def print_requests(env, metric, start, timezone, interval):
         vals = [r[1] for r in day]
         val_max = max(vals)
         val_sum = sum(vals)
-        print(from_utc_to_tz(datetime.fromtimestamp(day[0][0] / 1000), timezone).strftime('%Y-%m-%d'), float(val_max)/float(val_sum))
+        print(from_utc_to_tz(datetime.utcfromtimestamp(day[0][0] / 1000), timezone).strftime('%Y-%m-%d'), float(val_max)/float(val_sum))
 
 
 def from_utc_to_tz(date, tz):
