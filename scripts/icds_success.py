@@ -18,7 +18,7 @@ from utils import get_date, get_config, init_datadog, adjust_datetime_to_utc
 INTERVAL_SEC = 15 * 60
 
 MAX_INTERVAL_METRICS = {
-    'Form Processing Volume': "sum:nginx.requests{{environment:{env},url_group:receiver,status_code:201}}.as_count().rollup(sum, {rollup})",
+    'Form Processing Volume': "sum:commcare.xform_submissions.count{{environment:{env},!submission_type:device-log}}.as_count().rollup(sum, {rollup})",
     'Phone Sync Volume': "sum:nginx.requests{{environment:{env},url_group:phone/restore,status_code:200}}.as_count().rollup(sum, {rollup})",
 }
 
@@ -44,7 +44,7 @@ METRICS = {
         _get_top
     ),
     'Max Form submissions per day': (
-        "sum:nginx.requests{{environment:{env},url_group:receiver,status_code:201}}.as_count().rollup(sum, 86400)",
+        "sum:commcare.xform_submissions.count{{environment:{env},!submission_type:device-log}}.as_count().rollup(sum, 86400)",
         _get_max
     ),
     'Max Restores submissions per day': (
