@@ -3,9 +3,10 @@ from __future__ import division
 import argparse
 import json
 from collections import defaultdict, namedtuple, OrderedDict
-
+from datetime import datetime
 from memoized import memoized
-
+import time
+import sys
 from utils import get_config, init_datadog
 
 DATADOG_ENVS = [
@@ -20,9 +21,10 @@ DATADOG_ENVS = [
 
 def _get_args():
     parser = argparse.ArgumentParser(description='Print machine sizes for cluster.')
-    parser.add_argument('env_name', choices=DATADOG_ENVS, help='Environment to query.')
-    parser.add_argument('-c', '--config', default='config.yml', help='Path to config file.')
-    parser.add_argument('-d', '--days-past', type=int, default=7, help='How many days in the past to query.')
+    parser.add_argument('--env-name', choices=DATADOG_ENVS, help='Environment to query.', required=True)
+    parser.add_argument('-c', '--config', default='config.yml', help='Path to config file.', required=True)
+    parser.add_argument('-d', '--days-past', type=int, help='How many days in the past to query.')
+    parser.add_argument('--fixed-date', type=lambda d: datetime.strptime(d, '%Y-%m-%d') , help='Particular Date for which to query <YYYY-MM-DD>')
 
     return parser.parse_args()
 
@@ -105,18 +107,27 @@ def get_host_stats(env_name):
     return host_stats_list, all_disks
 
 
-def get_host_usage_stats(env_name, days_past):
+def get_host_usage_stats(env_name, days_past, fixed_date):
     from datadog import api
-    import time
+ 
+    def datetime_timestamp(days_past, fixed_date):
+        if days_past:
+            end_time = int(time.time())
+            period = 24 * 3600 * days_past
+            start_time = end_time - period
+        if fixed_date:
+            start_time= time.mktime(fixed_date.timetuple())
+            end_time = start_time + 24 * 60 * 60 - 1 
+        return start_time,end_time    
+    
+    start_time,end_time = datetime_timestamp(days_past, fixed_date)
 
-    now = int(time.time())
     usage_stats_by_host = defaultdict(dict)
     host_stats, all_disks = get_host_stats(env_name)
     host_stats_by_host = {stats.name: stats for stats in host_stats}
-
-    period = 24 * 3600 * days_past
-    start = now - period
-
+    
+    
+      
     def get_pointlist(query_result, tags=None):
         tags = tags or ['host']
         pointlist_by_host = defaultdict(dict)
@@ -143,47 +154,72 @@ def get_host_usage_stats(env_name, days_past):
         CPU expressed as proportion of total used. E.g. 0.25 means 25% used
         """
         query = 'min:system.cpu.idle{environment:%s}by{host}.rollup(min, 86400)' % env_name
-        cpu_stats = get_pointlist(api.Metric.query(start=start, end=now, query=query))
+        cpu_stats = get_pointlist(api.Metric.query(start=start_time, end=end_time, query=query))
         for host, pointlist in cpu_stats.items():
-            cpu_proportion = (1 - min(value for _, value in pointlist if value is not None) / 100)
-            cpu_total = host_stats_by_host[host].cpu_logical_processors
-            usage_stats_by_host[host]['cpu_logical_processors'] = cpu_total * cpu_proportion
-            usage_stats_by_host[host]['cpu_max_usage'] = cpu_proportion * 100
+            try:
+                cpu_proportion = (1 - min(value for _, value in pointlist if value is not None) / 100)
+                cpu_total = host_stats_by_host[host].cpu_logical_processors
+                usage_stats_by_host[host]['cpu_logical_processors'] = cpu_total * cpu_proportion
+                usage_stats_by_host[host]['cpu_max_usage'] = cpu_proportion * 100
+            except KeyError:
+                usage_stats_by_host[host]['cpu_logical_processors'] = 'NA'
+                usage_stats_by_host[host]['cpu_max_usage'] = 'NA'
 
     def add_highest_mem_in_last_week():
         query = 'max:system.mem.used{environment:%s}by{host}.rollup(max, 86400)' % env_name
-        mem_stats = get_pointlist(api.Metric.query(start=start, end=now, query=query))
+        mem_stats = get_pointlist(api.Metric.query(start=start_time, end=end_time, query=query))
         for host, pointlist in mem_stats.items():
-            memory_total = host_stats_by_host[host].memory
-            max_usage = max(value for _, value in pointlist) / 1024 ** 3
-            usage_stats_by_host[host]['memory'] = max_usage
-            usage_stats_by_host[host]['memory_max_usage'] = 100 * max_usage / int(memory_total)
+            try:
+                memory_total = host_stats_by_host[host].memory
+                max_usage = max(value for _, value in pointlist) / 1024 ** 3
+                usage_stats_by_host[host]['memory'] = max_usage
+                usage_stats_by_host[host]['memory_max_usage'] = 100 * max_usage / int(memory_total)
+            except KeyError:
+                usage_stats_by_host[host]['memory'] = 'NA'
+                usage_stats_by_host[host]['memory_max_usage'] = 'NA'
 
     def add_highest_swap_in_last_week():
         query = 'max:system.swap.used{environment:%s}by{host}.rollup(max, 86400)' % env_name
-        swap_stats = get_pointlist(api.Metric.query(start=start, end=now, query=query))
+        swap_stats = get_pointlist(api.Metric.query(start=start_time, end=end_time, query=query))
         for host, pointlist in swap_stats.items():
-            usage_stats_by_host[host]['swap'] = max(value for _, value in pointlist) / 1024 ** 3
+            try:
+                usage_stats_by_host[host]['swap'] = max(value for _, value in pointlist) / 1024 ** 3
+            except KeyError:
+                usage_stats_by_host[host]['swap'] = 'NA'
 
     def add_highest_disk_in_last_week():
         for host in host_stats_by_host:
-            usage_stats_by_host[host]['disk'] = 0
-            usage_stats_by_host[host]['all_disks'] = defaultdict(int)
+                usage_stats_by_host[host]['disk'] = 0
+                usage_stats_by_host[host]['all_disks'] = defaultdict(int)
 
         query = 'max:system.disk.in_use{environment:%s}by{host,device}.rollup(max, 86400)' % (env_name)
-        disk_stats = get_pointlist(api.Metric.query(start=start, end=now, query=query), tags=['host', 'device'])
+        disk_stats = get_pointlist(api.Metric.query(start=start_time, end=end_time, query=query), tags=['host', 'device'])
         for host, by_device in disk_stats.items():
             for device, pointlist in by_device.items():
-                new_value = max(value for _, value in pointlist) * 100
-                if device in ('/opt/data', '/opt/data/ecrypt', '/opt_new', '/opt/data1'):
-                    usage_stats_by_host[host]['disk'] = max(usage_stats_by_host[host]['disk'], new_value)
-                usage_stats_by_host[host]['all_disks'][device] = max(usage_stats_by_host[host]['all_disks'][device], new_value)
+                try:
+                    new_value = max(value for _, value in pointlist) * 100
+                    if device in ('/opt/data', '/opt/data/ecrusage_stats_by_hostusage_stats_by_hostypt', '/opt_new', '/opt/data1'):
+                        usage_stats_by_host[host]['disk'] = max(usage_stats_by_host[host]['disk'], new_value)  
+
+                    if not (usage_stats_by_host[host]['disk'] == 'NA'):
+                        usage_stats_by_host[host]['all_disks'][device] = max(usage_stats_by_host[host]['all_disks'][device], new_value)
+                except KeyError:
+                    usage_stats_by_host[host]['disk'] = 'NA'
+                    usage_stats_by_host[host]['all_disks'] = 'NA'
 
     add_highest_cpu_in_last_week()
     add_highest_mem_in_last_week()
     add_highest_swap_in_last_week()
     add_highest_disk_in_last_week()
-    return sorted((HostStats(name=host, **stats) for host, stats in usage_stats_by_host.items()),
+    
+    # DELETE HOSTS FROM DICT
+    for key,value in usage_stats_by_host.items():
+        if 'NA' in value: # WHICH DATA ARE AVAILABLE IN PAST BUT REMOVED NOW
+            del usage_stats_by_host[key]
+        if len(usage_stats_by_host[key]) < 7: # WHICH DATA ARE PRESENT NOW BUT NOT AVAILABLE IN PAST
+            del usage_stats_by_host[key]     
+               
+    return sorted((HostStats(name=host, **stats)  for host, stats in usage_stats_by_host.items()),
                   key=lambda host_stats: host_stats.name)
 
 
@@ -202,7 +238,7 @@ def print_hosts(env_name):
         print(template.format(**asdict))
 
 
-def print_host_usage(env_name, days_past):
+def print_host_usage(env_name, days_past, date_fixed):
     stats, all_disks = get_host_stats(env_name)
     fixed_headers = ','.join([
         'Name', 'Memory (GB)', 'Swap (GB)', 'Logical Processors',
@@ -210,20 +246,27 @@ def print_host_usage(env_name, days_past):
     ])
     print('{},{}'.format(fixed_headers, ','.join(all_disks)))
     template = '{name},{memory:.1f},{swap:.1f},{cpu_logical_processors:.1f},{memory_max_usage:.1f},{cpu_max_usage:.1f},{disk_max:.1f},{%s:.1f}' % ':.1f},{'.join(all_disks)
-    for host_stats in get_host_usage_stats(env_name, days_past):
+    for host_stats in get_host_usage_stats(env_name, days_past, date_fixed):
         asdict = host_stats._asdict()
         disks = asdict.pop('all_disks')
-        disks = OrderedDict(sorted(disks.items()))
-        for d in all_disks:
-            disks.setdefault(d, 0)
-        asdict.update(disks)
-        asdict['disk_max'] = max(disks.values())
-        print(template.format(**asdict))
+        if disks != 'NA':
+            disks = OrderedDict(sorted(disks.items()))
+            for d in all_disks:
+                disks.setdefault(d, 0)
+            asdict.update(disks)
+            asdict['disk_max'] = max(disks.values())
+            print(template.format(**asdict))
 
 
 if __name__ == "__main__":
     args = _get_args()
+    if args.days_past is None and args.fixed_date is None :
+       print("ERROR : Please specify either days_past or fixed_date args") 
+       sys.exit(1)
+    if args.days_past and args.fixed_date:
+        print("ERROR : Please specify either days_past or fixed_date args")
+        sys.exit(1)
     config = get_config(args.config)
     init_datadog(config)
     print_hosts(args.env_name)
-    print_host_usage(args.env_name, args.days_past)
+    print_host_usage(args.env_name, args.days_past, args.fixed_date)
