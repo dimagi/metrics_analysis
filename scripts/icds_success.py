@@ -19,7 +19,7 @@ INTERVAL_SEC = 15 * 60
 
 MAX_INTERVAL_METRICS = {
     'Form Processing Volume': "sum:commcare.xform_submissions.count{{environment:{env},!submission_type:device-log}}.as_count().rollup(sum, {rollup})",
-    'Phone Sync Volume': "sum:nginx.requests{{environment:{env},url_group:phone/restore,status_code:200}}.as_count().rollup(sum, {rollup})",
+    'Phone Sync Volume': "sum:commcare.restores.count{{environment:{env}}}.as_count().rollup(sum, {rollup})",
 }
 
 
@@ -41,26 +41,34 @@ def _get_top(results):
 METRICS = {
     'Total forms submissions': (
         "top(cumsum(sum:commcare.xform_submissions.count{{environment:{env},!submission_type:device-log}}.as_count()), 1, 'last', 'desc')",
-        _get_top
+        _get_top,
+        []
     ),
     'Max Form submissions per day': (
         "sum:commcare.xform_submissions.count{{environment:{env},!submission_type:device-log}}.as_count().rollup(sum, 86400)",
-        _get_max
+        _get_max,
+        []
     ),
     'Max Restores submissions per day': (
-        "sum:nginx.requests{{environment:{env},url_group:phone/restore,status_code:200}}.as_count().rollup(sum, 86400)",
-        _get_max
+        "sum:commcare.restores.count{{environment:{env}}}.as_count().rollup(sum, 86400)",
+        _get_max,
+        []
     ),
-    'Avg Success %': (
+    'Avg {name} Success %': (
         "("
-        "  sum:nginx.requests{{environment:{env},status_code:200}}.as_count().rollup(sum, 86400)"
-        "+ sum:nginx.requests{{environment:{env},status_code:201}}.as_count().rollup(sum, 86400)"
-        "+ sum:nginx.requests{{environment:{env},status_code:202}}.as_count().rollup(sum, 86400)"
-        "+ sum:nginx.requests{{environment:{env},status_code:301}}.as_count().rollup(sum, 86400)"
-        "+ sum:nginx.requests{{environment:{env},status_code:302}}.as_count().rollup(sum, 86400)"
-        "+ sum:nginx.requests{{environment:{env},status_code:412}}.as_count().rollup(sum, 86400)"
-        ")*100/sum:nginx.requests{{environment:{env}}}.as_count().rollup(sum, 86400)",
-        _get_avg
+        "  sum:nginx.requests{{environment:{env},status_code:200,{filter} }}.as_count().rollup(sum, 86400)"
+        "+ sum:nginx.requests{{environment:{env},status_code:201,{filter} }}.as_count().rollup(sum, 86400)"
+        "+ sum:nginx.requests{{environment:{env},status_code:202,{filter} }}.as_count().rollup(sum, 86400)"
+        "+ sum:nginx.requests{{environment:{env},status_code:301,{filter} }}.as_count().rollup(sum, 86400)"
+        "+ sum:nginx.requests{{environment:{env},status_code:302,{filter} }}.as_count().rollup(sum, 86400)"
+        "+ sum:nginx.requests{{environment:{env},status_code:412,{filter} }}.as_count().rollup(sum, 86400)"
+        ")*100/sum:nginx.requests{{environment:{env},{filter} }}.as_count().rollup(sum, 86400)",
+        _get_avg,
+        [
+            {'name': 'Sync', 'filter': 'url_group:phone/restore'},
+            {'name': 'Submission', 'filter': 'url_group:receiver'},
+            {'name': 'App', 'filter': 'url_group:apps'},
+        ]
     ),
 }
 
@@ -81,12 +89,14 @@ def print_requests(start_date, end_date, show_data=False):
     end_utc = adjust_datetime_to_utc(end_date, timezone)
     print('Reporting for period: {} to {}'.format(start_utc, end_utc))
 
-    for metric, (query, extractor) in METRICS.items():
-        query = query.format(env='icds')
-        results = api.Metric.query(start=start_utc.strftime('%s'), end=end_utc.strftime('%s'), query=query)
-        date, value = extractor(results)
-        date_output = ' on {}'.format(format_epoch(date, timezone)) if date else ''
-        print('\n{}: {:.0f}{}'.format(metric, value, date_output))
+    for metric, (query, extractor, contexts) in METRICS.items():
+        contexts = contexts or [{}]
+        for context in contexts:
+            context['env'] = 'icds'
+            results = api.Metric.query(start=start_utc.strftime('%s'), end=end_utc.strftime('%s'), query=query.format(**context))
+            date, value = extractor(results)
+            date_output = ' on {}'.format(format_epoch(date, timezone)) if date else ''
+            print('\n{}: {:.0f}{}'.format(metric.format(**context), value, date_output))
 
     for metric in MAX_INTERVAL_METRICS:
         if show_data:
