@@ -74,6 +74,7 @@ METRICS = {
 
 def _get_args():
     parser = argparse.ArgumentParser(description='Print basic request success data')
+    parser.add_argument('active_user_count', type=int, help='Count of active users. Used to normalize results.')
     parser.add_argument('--config', default='config.yml', help='Path to config file.')
     parser.add_argument('--start-date', help='Start Date. Defaults to first day of last month')
     parser.add_argument('--end-date', help='End Date. Defaults to last day of last month')
@@ -82,7 +83,7 @@ def _get_args():
     return parser.parse_args()
 
 
-def print_requests(start_date, end_date, show_data=False):
+def print_requests(normalize, start_date, end_date, show_data=False):
     timezone = ENV_TZ['icds']
     start_utc = adjust_datetime_to_utc(start_date, timezone)
 
@@ -97,6 +98,7 @@ def print_requests(start_date, end_date, show_data=False):
             date, value = extractor(results)
             date_output = ' on {}'.format(format_epoch(date, timezone)) if date else ''
             print('\n{}: {:.0f}{}'.format(metric.format(**context), value, date_output))
+            print('{} (normalized to 100 users): {:.2f}{}'.format(metric.format(**context), normalize(value), date_output))
 
     for metric in MAX_INTERVAL_METRICS:
         if show_data:
@@ -157,6 +159,7 @@ def print_requests(start_date, end_date, show_data=False):
         max_item = sorted(daily_max, key=lambda x: x[1])[-1]
         date = format_epoch(max_item[0], timezone, '%Y-%m-%d %H:%M')
         print('\nPeak Performance (15 Minute Max) {}: {} on {}'.format(metric, max_item[1], date))
+        print('Peak Performance (15 Minute Max) {} normalized per 100 users: {:.1f} on {}'.format(metric, normalize(max_item[1]), date))
 
 
 def format_epoch(day, timezone, format='%Y-%m-%d'):
@@ -186,4 +189,9 @@ if __name__ == "__main__":
 
     config = get_config(args.config)
     init_datadog(config)
-    print_requests(start, end, args.show_data)
+
+    def normalize(value):
+        # per 100 users
+        return float(value) / args.active_user_count * 100
+
+    print_requests(normalize, start, end, args.show_data)
