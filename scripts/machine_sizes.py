@@ -7,16 +7,9 @@ from datetime import datetime
 from memoized import memoized
 import time
 import sys
-from utils import get_config, init_datadog
 
-DATADOG_ENVS = [
-    'icds',
-    'pna',
-    'production',
-    'softlayer',
-    'staging',
-    'swiss',
-]
+from scripts.const import DATADOG_ENVS
+from utils import get_config, init_datadog, get_pointlist_by_host
 
 
 def _get_args():
@@ -128,33 +121,12 @@ def get_host_usage_stats(env_name, days_past, fixed_date):
     
     
       
-    def get_pointlist(query_result, tags=None):
-        tags = tags or ['host']
-        pointlist_by_host = defaultdict(dict)
-        for by_host in query_result['series']:
-            scope = {}
-            for tag in by_host['scope'].split(','):
-                split = tag.split(':')
-                if len(split) > 2:  # device:100.71.188.44:/opt/shared_icds
-                    scope[split[0]] = split[-1]
-                else:
-                    scope[split[0]] = split[1]
-            pointlist = by_host['pointlist']
-            context = pointlist_by_host
-            for tag in tags[:-1]:
-                key = scope[tag]
-                if key not in context:
-                    context[key] = {}
-                context = context[key]
-            context[scope[tags[-1]]] = pointlist
-        return pointlist_by_host
-
     def add_highest_cpu_in_last_week():
         """
         CPU expressed as proportion of total used. E.g. 0.25 means 25% used
         """
         query = 'min:system.cpu.idle{environment:%s}by{host}.rollup(min, 86400)' % env_name
-        cpu_stats = get_pointlist(api.Metric.query(start=start_time, end=end_time, query=query))
+        cpu_stats = get_pointlist_by_host(api.Metric.query(start=start_time, end=end_time, query=query))
         for host, pointlist in cpu_stats.items():
             try:
                 cpu_proportion = (1 - min(value for _, value in pointlist if value is not None) / 100)
@@ -167,7 +139,7 @@ def get_host_usage_stats(env_name, days_past, fixed_date):
 
     def add_highest_mem_in_last_week():
         query = 'max:system.mem.used{environment:%s}by{host}.rollup(max, 86400)' % env_name
-        mem_stats = get_pointlist(api.Metric.query(start=start_time, end=end_time, query=query))
+        mem_stats = get_pointlist_by_host(api.Metric.query(start=start_time, end=end_time, query=query))
         for host, pointlist in mem_stats.items():
             try:
                 memory_total = host_stats_by_host[host].memory
@@ -180,7 +152,7 @@ def get_host_usage_stats(env_name, days_past, fixed_date):
 
     def add_highest_swap_in_last_week():
         query = 'max:system.swap.used{environment:%s}by{host}.rollup(max, 86400)' % env_name
-        swap_stats = get_pointlist(api.Metric.query(start=start_time, end=end_time, query=query))
+        swap_stats = get_pointlist_by_host(api.Metric.query(start=start_time, end=end_time, query=query))
         for host, pointlist in swap_stats.items():
             try:
                 usage_stats_by_host[host]['swap'] = max(value for _, value in pointlist) / 1024 ** 3
@@ -193,7 +165,7 @@ def get_host_usage_stats(env_name, days_past, fixed_date):
                 usage_stats_by_host[host]['all_disks'] = defaultdict(int)
 
         query = 'max:system.disk.in_use{environment:%s}by{host,device}.rollup(max, 86400)' % (env_name)
-        disk_stats = get_pointlist(api.Metric.query(start=start_time, end=end_time, query=query), tags=['host', 'device'])
+        disk_stats = get_pointlist_by_host(api.Metric.query(start=start_time, end=end_time, query=query), tags=['host', 'device'])
         for host, by_device in disk_stats.items():
             for device, pointlist in by_device.items():
                 try:
