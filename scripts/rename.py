@@ -83,7 +83,7 @@ class Rename(object):
 def histogram_change(orig_name, new_name, tag_name='duration'):
     return [
         Rename(orig_name, new_name, IN('by {{{}}}'.format(tag_name))),
-        Rename(orig_name, new_name, IN('duration:'), NOT(IN('by {{{}}}'.format(tag_name)))),
+        Rename(orig_name, new_name, IN('{}:'.format(tag_name)), NOT(IN('by {{{}}}'.format(tag_name)))),
     ]
 
 
