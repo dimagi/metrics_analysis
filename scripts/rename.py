@@ -149,6 +149,34 @@ def _check_query(request, context):
     return False
 
 
+def process_widgets(widgets):
+    changed = False
+    for widget in widgets:
+        widget = widget['definition']
+        if 'widgets' in widget:
+            return process_widgets(widget['widgets'])
+
+        requests = widget.get('requests')
+        if not requests:
+            continue
+        widget_title = widget.get('title', '')
+        if isinstance(requests, list):
+            for req in requests:
+                if 'q' in req:
+                    changed |= _check_query(req, widget_title)
+        elif isinstance(requests, dict):
+            try:
+                changed |= _check_query(requests['fill'], widget_title)
+            except KeyError:
+                pass
+
+            try:
+                changed |= _check_query(requests['size'], widget_title)
+            except KeyError:
+                pass
+    return changed
+
+
 if __name__ == "__main__":
     args = _get_args()
     config = get_config(args.config)
@@ -159,29 +187,10 @@ if __name__ == "__main__":
             continue
         print('--------------------------------------------------------')
         print(dashboard_info['title'])
-        changed = False
         dashboard = api.Dashboard.get(dashboard_info['id'])
         dashboard_orig = json.loads(json.dumps(dashboard))
-        for widget in dashboard['widgets']:
-            widget = widget['definition']
-            requests = widget.get('requests')
-            if not requests:
-                continue
-            widget_title = widget.get('title', '')
-            if isinstance(requests, list):
-                for req in requests:
-                    if 'q' in req:
-                        changed |= _check_query(req, widget_title)
-            elif isinstance(requests, dict):
-                try:
-                    changed |= _check_query(requests['fill'], widget_title)
-                except KeyError:
-                    pass
-
-                try:
-                    changed |= _check_query(requests['size'], widget_title)
-                except KeyError:
-                    pass
+        widgets = dashboard['widgets']
+        changed = process_widgets(widgets)
         if changed and args.update:
             with open("{}-{}-{}.json".format(dashboard_info['id'], dashboard_info['title'], datetime.utcnow().isoformat()), 'w') as f:
                 json.dump(dashboard_orig, f, indent=4)
