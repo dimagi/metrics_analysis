@@ -97,6 +97,7 @@ CHANGES = [
     Rename('active_duration_per_case', 'duration'),
 
     histogram_change('commcare.celery.task.time_to_run', 'commcare.celery.task.time_to_run.seconds'),
+    Rename('commcare.celery.task.time_to_run', 'commcare.celery.task.time_to_run.seconds'),
     histogram_change('commcare.restores.count', 'commcare.restores.duration.seconds')
 ]
 
