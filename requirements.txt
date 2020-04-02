@@ -4,3 +4,4 @@ PyYAML
 python-dateutil
 memoized
 requests
+clint

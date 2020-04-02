@@ -1,24 +1,26 @@
 import argparse
+import difflib
 import itertools
 import json
-import sys
-from collections import defaultdict
-from datetime import timedelta, datetime
+import re
+from datetime import datetime
 
-import pytz
 from datadog import api
 
-from icds_success import format_epoch
-from utils import arg_date_type
-from utils import get_pointlist_by_host, get_config, init_datadog
+from utils import get_config, init_datadog
+from clint.textui import colored
 
 
 class IN(object):
-    def __init__(self, val):
+    def __init__(self, val, tokenize=False):
+        self.tokenize = tokenize
         self.val = val
 
     def __call__(self, query):
-        return self.val in query
+        if not self.tokenize:
+            return self.val in query
+        tokens = re.split('[:{}]', query)
+        return any(token == self.val for token in tokens)
 
     def __repr__(self):
         return "IN('{self.val}')".format(self=self)
@@ -59,7 +61,7 @@ class NOT(object):
 
 class Rename(object):
     def __init__(self, from_val, to_val, *checkers):
-        self.checker = AND(IN(from_val), *checkers)
+        self.checker = AND(IN(from_val, tokenize=True), *checkers)
         self.from_val = from_val
         self.to_val = to_val
         self.seen = False
@@ -70,6 +72,9 @@ class Rename(object):
 
     def mark_seen(self):
         self.seen = True
+
+    def __iter__(self):
+        yield self
 
     def __repr__(self):
         return "Change(from='{self.from_val}', to='{self.to_val}', checks={self.checker})".format(self=self)
@@ -92,9 +97,10 @@ CHANGES = [
     Rename('active_duration_per_case', 'duration'),
 
     histogram_change('commcare.celery.task.time_to_run', 'commcare.celery.task.time_to_run.seconds'),
+    histogram_change('commcare.restores.count', 'commcare.restores.duration.seconds')
 ]
 
-for segment in ('waiting', 'fixtures', 'fixture', 'cases', 'count'):
+for segment in ('waiting', 'fixtures', 'fixture', 'cases'):
     CHANGES.append(histogram_change('commcare.restores.{}'.format(segment), 'commcare.restores.{}.duration.seconds'.format(segment)))
 
 
@@ -102,16 +108,38 @@ def _get_args():
     parser = argparse.ArgumentParser(description='Print CSV data from by host query')
     parser.add_argument('--config', default='config.yml', help='Path to config file.')
     parser.add_argument('--update', action='store_true', help='Perform the update')
+    parser.add_argument('--dashboard', help='Only process this dashboard')
     return parser.parse_args()
 
 
-def _check_query(request, attr='q'):
+def inline_diff(a, b):
+    matcher = difflib.SequenceMatcher(None, a, b)
+
+    def process_tag(tag, i1, i2, j1, j2):
+        if tag == 'replace':
+            return colored.red(matcher.a[i1:i2]), colored.green(matcher.b[j1:j2])
+        if tag == 'delete':
+            return colored.red(matcher.a[i1:i2]), ''
+        if tag == 'equal':
+            return matcher.a[i1:i2], matcher.a[i1:i2]
+        if tag == 'insert':
+            return '', colored.green(matcher.b[j1:j2])
+        assert False, "Unknown tag %r"%tag
+
+    parts = [process_tag(*t) for t in matcher.get_opcodes()]
+    l1, l2 = list(zip(*parts))
+    return ''.join(str(p) for p in l1), ''.join(str(p) for p in l2)
+
+
+def _check_query(request, context):
+    attr = 'q'
     query = request[attr]
     for change in itertools.chain.from_iterable(CHANGES):
         new = change(query)
         if new:
             change.mark_seen()
-            print('\t{}\n\t{}\n'.format(query, new))
+            diff_old, diff_new = inline_diff(query, new)
+            print('    "{}"\n\t{}\n\t{}\n'.format(context, diff_old, diff_new))
             query = new
     if request[attr] != query:
         request[attr] = query
@@ -126,6 +154,8 @@ if __name__ == "__main__":
     init_datadog(config)
     dashboards = api.Dashboard.get_all()
     for dashboard_info in dashboards['dashboards']:
+        if args.dashboard and dashboard_info['title'] != args.dashboard:
+            continue
         print('--------------------------------------------------------')
         print(dashboard_info['title'])
         changed = False
@@ -136,18 +166,19 @@ if __name__ == "__main__":
             requests = widget.get('requests')
             if not requests:
                 continue
+            widget_title = widget.get('title', '')
             if isinstance(requests, list):
                 for req in requests:
                     if 'q' in req:
-                        changed |= _check_query(req)
+                        changed |= _check_query(req, widget_title)
             elif isinstance(requests, dict):
                 try:
-                    changed |= _check_query(requests['fill'])
+                    changed |= _check_query(requests['fill'], widget_title)
                 except KeyError:
                     pass
 
                 try:
-                    changed |= _check_query(requests['size'])
+                    changed |= _check_query(requests['size'], widget_title)
                 except KeyError:
                     pass
         if changed and args.update:
@@ -160,12 +191,12 @@ if __name__ == "__main__":
 
     monitors = api.Monitor.get_all()
     for monitor in monitors:
-        for change in CHANGES:
+        for change in itertools.chain.from_iterable(CHANGES):
             query = monitor['query']
             if change.from_val in query:
                 print('Found in monitor: {}\n\t{}\n'.format(monitor['name'], query))
             # api.Monitor.update(monitor['id'], query=)
 
-    for change in CHANGES:
+    for change in itertools.chain.from_iterable(CHANGES):
         if not change.seen:
             print("Change not found: {}".format(change))
