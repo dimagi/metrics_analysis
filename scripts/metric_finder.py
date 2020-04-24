@@ -1,5 +1,6 @@
 import argparse
 import json
+import re
 import sys
 from collections import defaultdict
 from datetime import timedelta
@@ -22,7 +23,7 @@ def _get_args():
 def _check_query(metrics, request, location):
     query = request.get('q', request.get('query'))
     for metric in metrics:
-        if metric in query:
+        if metric.findall(query):
             print("{}\n\tquery = '{}'\n".format(location, query))
 
 
@@ -30,7 +31,7 @@ if __name__ == "__main__":
     args = _get_args()
     config = get_config(args.config)
     init_datadog(config)
-    metrics = args.metrics
+    metrics = [re.compile(pattern) for pattern in args.metrics]
     dashboards = api.Dashboard.get_all()
     for dashboard_info in dashboards['dashboards']:
         dashboard = api.Dashboard.get(dashboard_info['id'])
