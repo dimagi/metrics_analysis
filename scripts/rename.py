@@ -87,23 +87,26 @@ def histogram_change(orig_name, new_name, tag_name='duration'):
     ]
 
 
+# CHANGES = [
+#     histogram_change('commcare.xform_submissions.count', 'commcare.xform_submissions.lag.days', 'lag'),
+#     histogram_change('commcare.xform_submissions.count', 'commcare.xform_submissions.duration.seconds'),
+#
+#     Rename('commcare.corrupt-multimedia-submission.error.count', 'commcare.corrupt_multimedia_submissions'),
+#
+#     histogram_change('commcare.case_importer.cases', 'commcare.case_importer.duration_per_case', 'active_duration_per_case'),
+#     Rename('active_duration_per_case', 'duration'),
+#
+#     histogram_change('commcare.celery.task.time_to_run', 'commcare.celery.task.time_to_run.seconds'),
+#     Rename('commcare.celery.task.time_to_run', 'commcare.celery.task.time_to_run.seconds'),
+#     histogram_change('commcare.restores.count', 'commcare.restores.duration.seconds')
+# ]
+#
+# for segment in ('waiting', 'fixtures', 'fixture', 'cases'):
+#     CHANGES.append(histogram_change('commcare.restores.{}'.format(segment), 'commcare.restores.{}.duration.seconds'.format(segment)))
+
 CHANGES = [
-    histogram_change('commcare.xform_submissions.count', 'commcare.xform_submissions.lag.days', 'lag'),
-    histogram_change('commcare.xform_submissions.count', 'commcare.xform_submissions.duration.seconds'),
-
-    Rename('commcare.corrupt-multimedia-submission.error.count', 'commcare.corrupt_multimedia_submissions'),
-
-    histogram_change('commcare.case_importer.cases', 'commcare.case_importer.duration_per_case', 'active_duration_per_case'),
-    Rename('active_duration_per_case', 'duration'),
-
-    histogram_change('commcare.celery.task.time_to_run', 'commcare.celery.task.time_to_run.seconds'),
-    Rename('commcare.celery.task.time_to_run', 'commcare.celery.task.time_to_run.seconds'),
-    histogram_change('commcare.restores.count', 'commcare.restores.duration.seconds')
+    Rename("formplayer.metrics.requests", "formplayer.metrics.timings.count")
 ]
-
-for segment in ('waiting', 'fixtures', 'fixture', 'cases'):
-    CHANGES.append(histogram_change('commcare.restores.{}'.format(segment), 'commcare.restores.{}.duration.seconds'.format(segment)))
-
 
 def _get_args():
     parser = argparse.ArgumentParser(description='Print CSV data from by host query')
